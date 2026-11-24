@@ -66,6 +66,22 @@ final class SnowCanvas: NSView {
         let x0: CGFloat, x1: CGFloat   // видимый участок верхнего края
         let y: CGFloat
         let winX: CGFloat              // левый край окна (для индекса столбца)
+        var landable = true            // false у сугроба закрытого окна: он только осыпается
+    }
+
+    /// Сугроб на верхнем краю окна. Когда окно двигают, снег съезжает в угол и сбрасывается с него.
+    private struct Pile {
+        var h: [CGFloat]
+        var rect: CGRect
+        var shed: Shed? = nil
+        var ghost = false              // окно закрыто или свёрнуто: сугроб досыпается на старом месте
+        var mass: CGFloat { h.reduce(0, +) }
+    }
+
+    private struct Shed {
+        var dir: CGFloat               // −1 — сползает к левому углу, +1 — к правому
+        var emit: CGFloat = 0          // таймер до следующего комка
+        var t: CGFloat = 0             // сколько уже осыпается
     }
 
     private static let colW: CGFloat = 4
@@ -78,11 +94,14 @@ final class SnowCanvas: NSView {
 
     private var flakes: [Flake] = []
     private var surfaces: [Surface] = []
-    private var piles: [Int: [CGFloat]] = [:]
-    private var winRects: [Int: CGRect] = [:]
+    private var piles: [Int: Pile] = [:]
+    private var movingUntil: CFTimeInterval = 0
     private var link: CADisplayLink?
     private var time: CGFloat = 0
     private var cursor: CGPoint?
+
+    /// Пока окна двигаются, контроллер опрашивает их чаще, чтобы сугроб не отставал.
+    var windowsAreMoving: Bool { CACurrentMediaTime() < movingUntil || piles.values.contains { $0.shed != nil } }
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
@@ -131,18 +150,52 @@ final class SnowCanvas: NSView {
                 }
             }
             for s in spans where s.1 - s.0 > 8 { segs.append(Surface(id: w.id, x0: s.0, x1: s.1, y: y, winX: w.rect.minX)) }
-            // Сугроб едет вместе с окном; при смене ширины подгоняем число столбцов
+
             let n = max(1, Int(w.rect.width / Self.colW))
-            var h = piles[w.id] ?? [CGFloat](repeating: 0, count: n)
-            if h.count != n { h = (0..<n).map { $0 < h.count ? h[$0] : 0 } }
-            piles[w.id] = h
-            winRects[w.id] = w.rect
+            var p = piles[w.id] ?? Pile(h: [CGFloat](repeating: 0, count: n), rect: w.rect)
+            if p.ghost { p.ghost = false; p.shed = nil }    // окно вернулось — сугроб снова его
+            let dx = w.rect.minX - p.rect.minX, dy = w.rect.minY - p.rect.minY, dw = w.rect.width - p.rect.width
+            if abs(dx) > 1.5 || abs(dy) > 1.5 || abs(dw) > 1.5 {
+                movingUntil = CACurrentMediaTime() + 0.5
+                if p.shed == nil, p.mass > 0.6 {
+                    // Снег по инерции съезжает назад по ходу движения; при ресайзе — в ближний к основной массе угол
+                    var dir: CGFloat = dx > 1.5 ? -1 : (dx < -1.5 ? 1 : 0)
+                    if dir == 0 { dir = massCenter(p.h) < 0.5 ? -1 : 1 }
+                    p.shed = Shed(dir: dir)
+                }
+            }
+            if p.h.count != n { p.h = (0..<n).map { $0 < p.h.count ? p.h[$0] : 0 } }
+            p.rect = w.rect
+            piles[w.id] = p
         }
-        for id in piles.keys where !alive.contains(id) { piles[id] = nil; winRects[id] = nil }   // окно закрыто: снег тает
+        // Окно закрыто, свёрнуто или ушло на другой Space: сугроб остаётся на месте и осыпается с угла
+        for (id, var p) in piles where !alive.contains(id) {
+            if p.mass < 0.4 { piles[id] = nil; continue }
+            if !p.ghost {
+                p.ghost = true
+                p.shed = Shed(dir: massCenter(p.h) < 0.5 ? -1 : 1)
+                piles[id] = p
+            }
+            segs.append(Surface(id: id, x0: p.rect.minX + 10, x1: p.rect.maxX - 10, y: p.rect.minY, winX: p.rect.minX, landable: false))
+        }
         surfaces = segs
     }
 
-    func clearSettledSnow() { for k in piles.keys { piles[k] = [CGFloat](repeating: 0, count: piles[k]!.count) } }
+    private func massCenter(_ h: [CGFloat]) -> CGFloat {
+        let m = h.reduce(0, +)
+        guard m > 0, h.count > 1 else { return 0.5 }
+        var acc: CGFloat = 0
+        for (i, v) in h.enumerated() { acc += v * CGFloat(i) }
+        return acc / m / CGFloat(h.count - 1)
+    }
+
+    func clearSettledSnow() {
+        for k in Array(piles.keys) {
+            guard var p = piles[k] else { continue }
+            p.h = [CGFloat](repeating: 0, count: p.h.count); p.shed = nil
+            piles[k] = p
+        }
+    }
 
     // MARK: Симуляция
 
@@ -224,13 +277,56 @@ final class SnowCanvas: NSView {
             i += 1
         }
         if config.cursor, let c = cursor { sweep(around: c, radius: R, dt: dt) }
+        shedPiles(dt)
         relaxPiles(dt)
+    }
+
+    /// Снег съезжает в угол окна и оттуда комками падает вниз, пока сугроб не опустеет.
+    private func shedPiles(_ dt: CGFloat) {
+        for (id, var p) in piles {
+            guard var sh = p.shed else { continue }
+            let n = p.h.count
+            guard n > 3 else { piles[id] = nil; continue }
+            let flow = min(0.9, dt * 14)
+            for _ in 0..<4 {   // несколько проходов за кадр — снег пересекает окно за доли секунды
+                if sh.dir < 0 { for c in 1..<n { let m = p.h[c] * flow; p.h[c] -= m; p.h[c - 1] += m } }
+                else { for c in stride(from: n - 2, through: 0, by: -1) { let m = p.h[c] * flow; p.h[c] -= m; p.h[c + 1] += m } }
+            }
+            let k = sh.dir < 0 ? 0 : n - 1
+            let cols = sh.dir < 0 ? [0, 1, 2] : [n - 1, n - 2, n - 3]
+            let heap = cols.reduce(0) { $0 + p.h[$1] }
+            sh.emit -= dt; sh.t += dt
+            if heap > 3.5, sh.emit <= 0 {
+                // Комок срывается с угла окна
+                let take = heap * 0.45
+                for c in cols { p.h[c] -= p.h[c] * 0.45 }
+                let cornerX = sh.dir < 0 ? p.rect.minX + Self.colW * 0.5 : p.rect.maxX - Self.colW * 0.5
+                let count = min(9, max(2, Int(take * 1.6)))
+                for _ in 0..<count where flakes.count < 4500 {
+                    flakes.append(Flake(x: cornerX + sh.dir * .random(in: -2...6), y: p.rect.minY - p.h[k] - .random(in: 0...3),
+                                        vx: sh.dir * .random(in: 25...80), vy: .random(in: -25...10), fall: 330,
+                                        r: .random(in: 1.6...3.8) * CGFloat(config.size), phase: .random(in: 0...6.28),
+                                        depth: 0.8, flutter: 1, amp: 1.5, life: .random(in: 2.2...3.6)))
+                }
+                sh.emit = 0.05
+            }
+            // Окно остановилось и комок в углу сброшен — дальше снег копится как обычно
+            if !p.ghost, CACurrentMediaTime() > movingUntil, sh.t > 0.35, heap <= 3.5 || sh.t > 2.5 {
+                p.shed = nil; piles[id] = p; continue
+            }
+            if p.mass < 0.35 {
+                if p.ghost { piles[id] = nil; continue }
+                p.h = [CGFloat](repeating: 0, count: n); p.shed = nil
+            } else { p.shed = sh }
+            piles[id] = p
+        }
     }
 
     /// Сугроб оседает под собственным весом: крутые склоны выравниваются, получаются мягкие холмики.
     private func relaxPiles(_ dt: CGFloat) {
         let k = min(0.5, dt * 6)
-        for (id, var h) in piles where h.count > 2 {
+        for (id, p0) in piles where p0.h.count > 2 && p0.shed == nil {
+            var h = p0.h
             var changed = false
             for c in 0..<(h.count - 1) {
                 let d = h[c] - h[c + 1]
@@ -240,14 +336,14 @@ final class SnowCanvas: NSView {
                     changed = true
                 }
             }
-            if changed { piles[id] = h }
+            if changed { piles[id]?.h = h }
         }
     }
 
     /// Снежинка пересекла поверхность сугроба — добавляем снег в столбец.
     private func land(_ f: inout Flake, prevY: CGFloat) -> Bool {
-        for s in surfaces where f.x >= s.x0 && f.x < s.x1 {
-            guard var h = piles[s.id] else { continue }
+        for s in surfaces where s.landable && f.x >= s.x0 && f.x < s.x1 {
+            guard var h = piles[s.id]?.h else { continue }
             let col = min(h.count - 1, max(0, Int((f.x - s.winX) / Self.colW)))
             let top = s.y - h[col]
             if prevY <= top && f.y >= top {
@@ -256,12 +352,12 @@ final class SnowCanvas: NSView {
                     h[col] += add
                     if col > 0 { h[col - 1] += add * 0.45 }
                     if col + 1 < h.count { h[col + 1] += add * 0.45 }
-                    piles[s.id] = h
+                    piles[s.id]?.h = h
                 } else if col > 1, col + 2 < h.count {
                     // Столбец полный — снег сползает на более низкого соседа
                     let side = h[col - 1] <= h[col + 1] ? col - 1 : col + 1
                     h[side] += add * 0.6
-                    piles[s.id] = h
+                    piles[s.id]?.h = h
                 }
                 return true
             }
@@ -272,7 +368,7 @@ final class SnowCanvas: NSView {
     /// Курсор сметает сугроб и подбрасывает снег в стороны.
     private func sweep(around c: CGPoint, radius R: CGFloat, dt: CGFloat) {
         for s in surfaces {
-            guard c.y > s.y - R, c.y < s.y + 24, var h = piles[s.id] else { continue }
+            guard c.y > s.y - R, c.y < s.y + 24, var h = piles[s.id]?.h else { continue }
             var touched = false
             let lo = max(s.x0, c.x - R), hi = min(s.x1, c.x + R)
             guard lo < hi else { continue }
@@ -291,7 +387,7 @@ final class SnowCanvas: NSView {
                                         life: .random(in: 0.8...1.8)))
                 }
             }
-            if touched { piles[s.id] = h }
+            if touched { piles[s.id]?.h = h }
         }
     }
 
@@ -379,7 +475,7 @@ final class SnowCanvas: NSView {
             CGColor(red: 1, green: 1, blue: 1, alpha: 0.98), CGColor(red: 0.86, green: 0.92, blue: 1, alpha: 0.96)] as CFArray,
             locations: [0, 1])!
         for s in surfaces {
-            guard let h = piles[s.id], !h.isEmpty else { continue }
+            guard let h = piles[s.id]?.h, !h.isEmpty else { continue }
             let c0 = max(0, Int((s.x0 - s.winX) / Self.colW)), c1 = min(h.count - 1, Int((s.x1 - s.winX) / Self.colW))
             guard c0 < c1 else { continue }
             let p = CGMutablePath(), edge = CGMutablePath()
@@ -549,19 +645,28 @@ final class SnowController {
             o.canvas.config = config
             overlays[info.key] = o
         }
-        if scanTimer == nil {
-            scanTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.scan() }
-            }
-        }
+        if scanTimer == nil { scheduleScan(after: 0.1) }
         updatePause()
     }
 
-    private func scan() {
-        guard config.onWindows else { return }
-        for (k, o) in overlays where !paused.contains(k) {
-            o.canvas.updateWindows(SnowWindowScan.windows(on: o.cgBounds))
+    /// 10 раз в секунду в покое и 30, пока окна двигаются или сугробы осыпаются: так сугроб не отстаёт от окна.
+    private func scheduleScan(after delay: TimeInterval) {
+        scanTimer?.invalidate()
+        scanTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.scan() }
         }
+    }
+
+    private func scan() {
+        guard enabled else { return }
+        var fast = false
+        if config.onWindows {
+            for (k, o) in overlays where !paused.contains(k) {
+                o.canvas.updateWindows(SnowWindowScan.windows(on: o.cgBounds))
+                fast = fast || o.canvas.windowsAreMoving
+            }
+        }
+        scheduleScan(after: fast ? 1.0 / 30 : 0.1)
     }
 
     /// Паузы снега не зависят от пауз обоев: у каждого свои переключатели в настройках.
