@@ -592,5 +592,6 @@ steamcmd установлен ||| steamcmd installed
 При блокировке экрана и сне дисплея ||| On screen lock and display sleep
 Когда окно развёрнуто почти на весь экран ||| When a window is nearly full screen
 Снег поверх окон не перехватывает клики: рабочий стол и окна остаются доступными. ||| Snow does not intercept clicks: your desktop and windows stay usable.
+Stage Manager включён: macOS не сообщает настоящее положение окон, поэтому снег на окнах отключён. Выключите Stage Manager в Пункте управления, чтобы вернуть сугробы. ||| Stage Manager is on: macOS does not report the real window positions, so snow on windows is disabled. Turn Stage Manager off in Control Center to get drifts back.
 """#
 }

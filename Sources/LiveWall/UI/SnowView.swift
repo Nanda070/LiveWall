@@ -28,6 +28,10 @@ struct SnowView: View {
                     Toggle(tr("Оседает на верхних краях окон"), isOn: b(\.snowOnWindows))
                     Toggle(tr("Курсор отталкивает снег и сметает сугробы"), isOn: b(\.snowCursor))
                     Toggle(tr("Гирлянды под строкой меню"), isOn: b(\.snowGarlands))
+                    if SnowController.stageManagerOn {
+                        Label(tr("Stage Manager включён: macOS не сообщает настоящее положение окон, поэтому снег на окнах отключён. Выключите Stage Manager в Пункте управления, чтобы вернуть сугробы."), systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                     Button(tr("Очистить сугробы")) { app.snow.clearSnow() }
                         .buttonStyle(GhostButtonStyle(compact: true))
                 }
