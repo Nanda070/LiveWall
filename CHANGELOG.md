@@ -2,6 +2,13 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **A wrong Steam password now says so.** steamcmd reports it as `ERROR (Invalid Password)`, which the sign-in screen didn't recognize, so it showed only “Sign-in failed (code 5)”. It now shows “Wrong login or password”.
+- **steamcmd without Rosetta 2 gets a clear message.** Valve ships steamcmd for Intel only, so on Apple Silicon without Rosetta 2 it couldn't start and sign-in failed with “code 126”. Installing steamcmd, signing in and downloading from the Workshop now check for Rosetta first and tell you the command that installs it.
+- **`build.sh` works with Command Line Tools on macOS 27.** The unsigned-build message broke the script at the signing step, and the macOS 27 SDK can't compile `@State` without Xcode. Without Xcode the script now builds against the newest SDK below 27.
+
 ## [1.7.2] — 2026-11-25
 
 ### Fixed
@@ -182,6 +189,7 @@ Full functionality and redesign, without the icon and docs.
 - Assigned wallpapers were reset on launch.
 - Global mouse monitoring asked for Accessibility access; the cursor is now polled without permissions.
 
+[Unreleased]: https://github.com/Jinjer07/LiveWall/compare/v1.7.2...HEAD
 [1.7.2]: https://github.com/Jinjer07/LiveWall/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/Jinjer07/LiveWall/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/Jinjer07/LiveWall/compare/v1.6.2...v1.7.0
