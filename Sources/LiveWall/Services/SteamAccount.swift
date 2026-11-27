@@ -27,6 +27,18 @@ final class SteamAccount: ObservableObject {
     static let bundledDir = Paths.root.appendingPathComponent("steamcmd", isDirectory: true)
     static var bundledSteamCMD: URL { bundledDir.appendingPathComponent("steamcmd.sh") }
 
+    /// steamcmd для macOS собран только под Intel: на Apple Silicon без Rosetta 2 он не запускается (код 126).
+    static var rosettaMissing: Bool {
+        #if arch(arm64)
+        return !FileManager.default.fileExists(atPath: "/Library/Apple/usr/libexec/oah/libRosettaRuntime")
+        #else
+        return false
+        #endif
+    }
+    static var rosettaMessage: String {
+        tr("steamcmd нужна Rosetta 2. Выполните в Терминале: softwareupdate --install-rosetta --agree-to-license")
+    }
+
     var installed: Bool { steam?.steamcmdPath() != nil }
     var username: String { app?.settings.steamUser ?? "" }
 
@@ -115,6 +127,7 @@ final class SteamAccount: ObservableObject {
         guard !u.isEmpty, let exe = steam?.steamcmdPath() else {
             login = .failed(tr("Сначала установите steamcmd")); return
         }
+        guard !Self.rosettaMissing else { login = .failed(Self.rosettaMessage); return }
         app?.settings.steamUser = u
         loginProc?.terminate()
         buffer = ""; passwordSent = false; pendingPassword = password
@@ -165,9 +178,9 @@ final class SteamAccount: ObservableObject {
             login = .success
             session = .signedIn(username)
         }
-        // Ошибки steamcmd: «FAILED (Invalid Password)», «ERROR! …» — только последняя строка вывода
+        // Ошибки steamcmd: «FAILED (Invalid Password)», «ERROR (Invalid Password)», «ERROR! …» — только последняя строка вывода
         let lines = buffer.components(separatedBy: CharacterSet.newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        if let line = lines.last(where: { $0.contains("FAILED (") || $0.contains("ERROR!") }), login != .success {
+        if let line = lines.last(where: { $0.contains("FAILED (") || $0.contains("ERROR (") || $0.contains("ERROR!") }), login != .success {
             let l = line.lowercased()
             if l.contains("invalid password") { login = .failed(tr("Неверный логин или пароль")) }
             else if l.contains("rate limit") { login = .failed(tr("Слишком много попыток. Подождите немного.")) }
@@ -183,6 +196,8 @@ final class SteamAccount: ObservableObject {
                 MainActor.assumeIsolated { self?.showLogin = false; self?.login = .idle }
             }
         } else if case .failed = login {
+        } else if code == 126 && Self.rosettaMissing {
+            login = .failed(Self.rosettaMessage)
         } else {
             login = .failed(tr("Вход не выполнен (код %@)", code))
         }
@@ -206,6 +221,7 @@ final class SteamAccount: ObservableObject {
 
     func installSteamCMD() {
         guard sync != .installing else { return }
+        guard !Self.rosettaMissing else { sync = .failed(Self.rosettaMessage); return }
         sync = .installing
         Task {
             do {

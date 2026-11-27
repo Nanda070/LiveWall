@@ -517,6 +517,7 @@ steamcmd установлен ||| steamcmd installed
 Вход выполнен: %@ ||| Signed in: %@
 Вход на steamcommunity.com ||| Sign in to steamcommunity.com
 Вход не выполнен (код %@) ||| Sign-in failed (code %@)
+steamcmd нужна Rosetta 2. Выполните в Терминале: softwareupdate --install-rosetta --agree-to-license ||| steamcmd needs Rosetta 2. Run in Terminal: softwareupdate --install-rosetta --agree-to-license
 Готово: добавлено %@ ||| Done: %@ added
 Добавлено из мастерской: %@ ||| Added from Workshop: %@
 Имя аккаунта Steam (не e-mail) ||| Steam account name (not e-mail)
