@@ -297,6 +297,7 @@ final class SteamService: ObservableObject {
         guard !busy else { return }
         guard let id = Self.parseID(input) else { status = tr("Не удалось распознать ID предмета"); return }
         guard let cmd = steamcmdPath() else { status = tr("steamcmd не найден. Установите его (см. инструкцию ниже) или укажите путь."); return }
+        guard !SteamAccount.rosettaMissing else { status = SteamAccount.rosettaMessage; return }
         let user = app?.settings.steamUser.trimmingCharacters(in: .whitespaces) ?? ""
         guard !user.isEmpty else { status = tr("Укажите логин Steam"); return }
 
